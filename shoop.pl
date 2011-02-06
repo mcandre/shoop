@@ -142,7 +142,13 @@ sub reset_signals {
 		# Allow terminal echo
 		if ($^O =~ /linux|darwin/) {
 			my $tty = POSIX::ttyname(1);
-			system "stty -f $tty icanon echo";
+
+			if ($^O =~ /darwin/) {
+				system "stty -f $tty icanon echo";
+			}
+			else {
+				system "stty -F $tty icanon echo";
+			}
 
 			# Show the cursor
 			print "\e[?25h";
