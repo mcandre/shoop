@@ -153,7 +153,7 @@ sub reset_signals {
 }
 
 sub shoop {
-	$con = Games::Roguelike::Console::ANSI->new;
+	$con = Games::Roguelike::Console->new;
 
 	# Force hide the cursor
 	if ($^O =~ /linux|darwin/) {
