@@ -45,7 +45,6 @@ $SIG{PIPE} = 'IGNORE'; # ignore broken pipes
 srand;
 
 our $con;
-our $message :shared;
 
 our $HIVE_QUERY = "http://search.twitter.com/search.atom?q=loic";
 our $TCP_TIMEOUT = 9001; # sec
@@ -131,12 +130,13 @@ sub flood {
 	}
 }
 
-
 # Games::Rogulelike and Curses do not quit properly.
 sub restore_console {
 	$alive = 0;
 
-	undef $con unless (!defined $con);
+	if (defined $con) {
+		undef $con;
+	}
 
 	# Allow terminal echo
 	if ($^O =~ /linux|darwin/) {
@@ -158,18 +158,26 @@ sub restore_console {
 		# Show the cursor
 		print "\e[?25h";
 	}
+
+	exit 0;
 }
 
+# In case $con is undefined
 sub safe_addstr {
 	my $x = shift @_;
 	my $y = shift @_;
 	my $str = shift @_;
 
-	$con->addstr($x, $y, $str) unless (!defined $con);
+	if (defined $con) {
+		$con->addstr($x, $y, $str);
+	}
 }
 
+# In case $con is undefined
 sub safe_refresh {
-	$con->refresh unless (!defined $con);
+	if (defined $con) {
+		$con->refresh;
+	}
 }
 
 sub blargh {
@@ -199,6 +207,7 @@ sub shoop {
 	
 	my $filler = "~" x ($width - 3);
 
+	# Console overwrites signal handlers.
 	$SIG{INT} = \&restore_console;
 
 	safe_addstr(0, 1, "O");
@@ -219,19 +228,19 @@ sub shoop {
 
 	my $pps = 0;
 
+	# Prevent division by zero in pps calculation.
 	while ($alive && $interval < 1) { $interval = time - $startt; }
 
 	safe_addstr(1, 3, $filler);
+	blargh " " x ($width - 3);
 	safe_addstr(3, 3, $filler);
 	safe_refresh;
 
 	while ($alive) {
 		$interval = time - $startt;
 
-		if ($interval > 1) {
-			$pps = $FORMATTER->format_number(int($PACKETS / $interval));
-			blargh "SENDING $pps PACKETS/SEC";
-		}
+		$pps = $FORMATTER->format_number(int($PACKETS / $interval));
+		blargh "SENDING $pps PACKETS/SEC";
 	}
 }
 
