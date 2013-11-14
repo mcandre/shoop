@@ -13,7 +13,7 @@ perlcritic:
 	-perlcritic . | grep -v "source OK"
 
 compile:
-	for f in *.erl; do erlc +debug_info $$f; done
+	for f in *.erl; do erlc -Wall +debug_info $$f; done
 
 ~/.dialyzer_plt: compile
 	dialyzer *.beam --build_plt --quiet
