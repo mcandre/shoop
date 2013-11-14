@@ -12,4 +12,16 @@ perl:
 perlcritic:
 	-perlcritic . | grep -v "source OK"
 
-lint: perl perlcritic
+compile:
+	for f in *.erl; do erlc +debug_info $$f; done
+
+~/.dialyzer_plt: compile
+	dialyzer *.beam --build_plt --quiet
+
+dialyzer: ~/.dialyzer_plt
+	dialyzer *.beam
+
+lint: perl perlcritic dialyzer
+
+clean:
+	-rm *.beam
