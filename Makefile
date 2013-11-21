@@ -15,11 +15,11 @@ perlcritic:
 compile:
 	for f in *.erl; do erlc -Wall +debug_info $$f; done
 
-~/.dialyzer_plt: compile
-	dialyzer *.beam --build_plt --quiet
+plt:
+	dialyzer *.beam --build_plt --apps erts kernel stdlib
 
-dialyzer: ~/.dialyzer_plt
-	dialyzer *.beam
+dialyzer: compile
+	dialyzer *.beam --quiet
 
 lint: perl perlcritic dialyzer
 
