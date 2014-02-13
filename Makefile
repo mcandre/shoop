@@ -3,14 +3,13 @@ all: test
 test: shoop.pl
 	perl shoop.pl
 
-perl:
-	-for f in *.pl; do perl -MO=Lint -cw $$f 2>&1 | grep -v "syntax OK"; done
-	-for f in **/*.pl; do perl -MO=Lint -cw $$f 2>&1 | grep -v "syntax OK"; done
-	-for f in *.pm; do perl -MO=Lint -cw $$f 2>&1 | grep -v "syntax OK"; done
-	-for f in **/*.pm; do perl -MO=Lint -cw $$f 2>&1 | grep -v "syntax OK"; done
+perlwarn:
+	-find . -type f -name '*.pl' -exec perl -MO=Lint -cw {} 2>&1 \; | grep -v "syntax OK" | grep -v "Can't locate"
+	-find . -type f -name '*.pm' -exec perl -MO=Lint -cw {} 2>&1 \; | grep -v "syntax OK" | grep -v "Can't locate"
+	-find . -type f -name '*.t' -exec perl -MO=Lint -cw {} 2>&1 \; | grep -v "syntax OK" | grep -v "Can't locate"
 
 perlcritic:
-	-perlcritic . | grep -v "source OK"
+	-perlcritic -q .
 
 compile:
 	for f in *.erl; do erlc -Wall +debug_info $$f; done
@@ -21,7 +20,7 @@ plt:
 dialyzer: compile
 	dialyzer *.beam --quiet
 
-lint: perl perlcritic dialyzer
+lint: perlwarn perlcritic dialyzer
 
 clean:
 	-rm *.beam
